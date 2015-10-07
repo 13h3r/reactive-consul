@@ -1,0 +1,54 @@
+# Created by http://gitignore.io
+
+# ignore developer configs
+dev*.conf
+logback-dev.xml
+it.dev.conf
+
+### IntelliJ ###
+*.iml
+*.ipr
+*.iws
+.idea/
+
+### Scala ###
+*.class
+*.log
+
+# sbt specific
+dist/*
+target/
+lib_managed/
+src_managed/
+project/boot/
+project/plugins/project/
+
+# Scala-IDE specific
+.scala_dependencies
+
+### SBT ###
+# SBT .gitignore
+# recommended: http://www.scala-sbt.org/release/docs/Getting-Started/Directories.html#configuring-version-control
+
+target/
+lib_managed/
+src_managed/
+project/boot/
+
+# ignore tmp files
+tmp/
+
+# ignore dev logs directory
+/logs/
+
+# ignore mac os x files
+.DS_Store
+
+# ignore diggers journal
+
+journal/
+/kitchen
+
+Test.scala
+
+.~*
