@@ -49,6 +49,6 @@ tmp/
 journal/
 /kitchen
 
-Test.scala
+Test*.scala
 
 .~*
