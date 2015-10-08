@@ -3,7 +3,7 @@ package rc
 import akka.actor.ActorSystem
 import akka.http.scaladsl.Http
 import akka.http.scaladsl.client.RequestBuilding._
-import akka.http.scaladsl.model.{HttpMessage, ContentTypes}
+import akka.http.scaladsl.model.{HttpResponse, HttpMessage, ContentTypes}
 import akka.http.scaladsl.unmarshalling.Unmarshal
 import akka.stream.{ActorMaterializer, Materializer}
 import spray.json._
@@ -69,39 +69,46 @@ class ConsulAPI(host: String, port: Int = 8500)(implicit as: ActorSystem, mat: M
     .find(_.name() == name)
     .map(_.value())
 
+  private def checkStatusCode(resp: HttpResponse) =
+    if (resp.status.isFailure())
+      Future.failed(new Exception(s"Wrong status code: ${resp.status.intValue()}"))
+    else
+      Future.successful(resp)
+
+  private def checkJsonContentType(resp: HttpResponse) =
+    if (resp.entity.contentType() != ContentTypes.`application/json`)
+      Future.failed(new Exception(s"Wrong content type: ${resp.entity.contentType()}"))
+    else
+      Future.successful(resp)
+
   def register(registration: Registration): Future[JsValue] = {
     Http().singleRequest(Put(
       s"http://$host:$port/v1/catalog/register",
       registration
     ))
-    .flatMap {
-        case resp if resp.status.isFailure() =>
-          Future.failed(new Exception(s"Wrong status code: ${resp.status.intValue()}"))
-        case resp if resp.entity.contentType() != ContentTypes.`application/json` =>
-          Future.failed(new Exception(s"Wrong content type: ${resp.entity.contentType()}"))
-        case resp => Unmarshal(resp).to[JsValue]
-      }
+    .flatMap(checkJsonContentType)
+    .flatMap(checkStatusCode)
+    .flatMap { case resp => Unmarshal(resp).to[JsValue] }
   }
 
   def service(service: String): Future[ConsulResponse[Seq[ServiceInfo]]] = {
-    Http().singleRequest(Get(s"http://$host:$port/v1/catalog/service/$service")).flatMap {
-      case resp if resp.status.isFailure() =>
-        Future.failed(new Exception(s"Wrong status code: ${resp.status.intValue()}"))
-      case resp if resp.entity.contentType() != ContentTypes.`application/json` =>
-        Future.failed(new Exception(s"Wrong content type: ${resp.entity.contentType()}"))
-      case resp =>
-        val state = for {
-          index <- header(resp, "X-Consul-Index").map(_.toInt)
-          knownLeader <- header(resp, "X-Consul-Knownleader").map(_.toBoolean)
-          lastContact <- header(resp, "X-Consul-Lastcontact").map(_.toInt)
-        } yield (index, knownLeader, lastContact)
+    Http().singleRequest(Get(s"http://$host:$port/v1/catalog/service/$service"))
+      .flatMap(checkJsonContentType)
+      .flatMap(checkStatusCode)
+      .flatMap {
+        case resp =>
+          val state = for {
+            index <- header(resp, "X-Consul-Index").map(_.toInt)
+            knownLeader <- header(resp, "X-Consul-Knownleader").map(_.toBoolean)
+            lastContact <- header(resp, "X-Consul-Lastcontact").map(_.toInt)
+          } yield (index, knownLeader, lastContact)
 
-        state.map { case (index, knownLeader, lastContact) =>
-          Unmarshal(resp)
-            .to[JsValue]
-            .map(js => ConsulResponse(index, knownLeader, lastContact, js.convertTo[Seq[ServiceInfo]]))
-        }.getOrElse(Future.failed(new Exception("Can not get required headers from consul")))
-    }
+          state.map { case (index, knownLeader, lastContact) =>
+            Unmarshal(resp)
+              .to[JsValue]
+              .map(js => ConsulResponse(index, knownLeader, lastContact, js.convertTo[Seq[ServiceInfo]]))
+          }.getOrElse(Future.failed(new Exception("Can not get required headers from consul")))
+      }
   }
 }
 
