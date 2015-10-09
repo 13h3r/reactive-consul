@@ -1,14 +1,17 @@
 package rc
 
-import akka.actor.ActorSystem
+import akka.actor.{Status, Props, ActorSystem}
 import akka.http.scaladsl.Http
 import akka.http.scaladsl.client.RequestBuilding._
-import akka.http.scaladsl.model.{HttpResponse, HttpMessage, ContentTypes}
+import akka.http.scaladsl.model.{Uri, HttpResponse, HttpMessage, ContentTypes}
 import akka.http.scaladsl.unmarshalling.Unmarshal
+import akka.stream.actor.ActorPublisher
+import akka.stream.scaladsl.Source
 import akka.stream.{ActorMaterializer, Materializer}
 import spray.json._
 
 import scala.concurrent.Future
+import scala.concurrent.duration.{FiniteDuration, Duration}
 
 case class Datacenter(name: String) extends AnyVal
 case class Service(
@@ -91,8 +94,14 @@ class ConsulAPI(host: String, port: Int = 8500)(implicit as: ActorSystem, mat: M
     .flatMap { case resp => Unmarshal(resp).to[JsValue] }
   }
 
-  def service(service: String): Future[ConsulResponse[Seq[ServiceInfo]]] = {
-    Http().singleRequest(Get(s"http://$host:$port/v1/catalog/service/$service"))
+
+  private def toMap(name: String, value: Option[String]) = value.map(x => Map(name -> x)).getOrElse(Map.empty)
+  def service(service: String, index: Option[Int] = None, wait: Option[FiniteDuration] = None): Future[ConsulResponse[Seq[ServiceInfo]]] = {
+    val uri: Uri = s"http://$host:$port/v1/catalog/service/$service"
+    val query = toMap("index", index.map(_.toString)) ++
+      toMap("wait", wait.map(_.toSeconds.toString + "s"))
+
+    Http().singleRequest(Get(uri.withQuery(query)))
       .flatMap(checkJsonContentType)
       .flatMap(checkStatusCode)
       .flatMap {
@@ -115,4 +124,50 @@ class ConsulAPI(host: String, port: Int = 8500)(implicit as: ActorSystem, mat: M
 object Implicits {
   lazy implicit val as = ActorSystem()
   lazy implicit val materializer = ActorMaterializer()
+}
+
+object Streaming {
+
+  private case class ConsulSource(api: ConsulAPI, name: String) extends ActorPublisher[Seq[ServiceInfo]] {
+    import scala.concurrent.duration._
+    import akka.pattern.pipe
+    import context.dispatcher
+    import akka.stream.actor.{ActorPublisherMessage => M}
+
+    var currentIndex: Option[Int] = None
+
+    override def receive: Receive = waitingForDownstream
+
+    def waitingForDownstream: Receive = {
+      case M.Request(n) =>
+        performRequestIfNeeded()
+    }
+
+    def requestInProgress: Receive = {
+      case si: ConsulResponse[Seq[ServiceInfo]] =>
+        println("Got response from consul")
+        println(si)
+        if(!currentIndex.contains(si.index)) {
+          onNext(si.value)
+        }
+        currentIndex = Some(si.index)
+        performRequestIfNeeded()
+      case Status.Failure(ex) =>
+        ex.printStackTrace()
+        onError(ex)
+    }
+
+    def performRequestIfNeeded() = {
+      if(isActive && totalDemand > 0) {
+        api.service(name, currentIndex, Some(10 seconds)) pipeTo self
+        context.become(requestInProgress)
+      } else {
+        context.become(waitingForDownstream)
+      }
+    }
+  }
+
+  def service(api: ConsulAPI, name: String) = {
+    Source.actorPublisher[Seq[ServiceInfo]](Props.apply(ConsulSource(api, name)))
+  }
 }
