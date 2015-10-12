@@ -53,7 +53,6 @@ trait JsonProtocol extends DefaultJsonProtocol {
               case JsString(value) => value
               case x => deserializationError(s"Service tag has wrong type - ${x.getClass}")
             }.toSet
-            case x => deserializationError(s"Service tags has wrong type - ${x.getClass}")
           }
           ServiceInfo(
             node,
