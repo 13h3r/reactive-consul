@@ -11,7 +11,7 @@ import akka.stream.{ActorMaterializer, Materializer}
 import spray.json._
 
 import scala.concurrent.Future
-import scala.concurrent.duration.{FiniteDuration, Duration}
+import scala.concurrent.duration._
 
 case class Datacenter(name: String) extends AnyVal
 case class Service(
@@ -24,6 +24,8 @@ case class Service(
 case class Registration(node: String, address: String, service: Option[Service])
 
 case class ServiceInfo(node: String, address: String, service: Service)
+
+case class PollOptions(index: Int, finiteDuration: FiniteDuration)
 
 case class ConsulResponse[T](
   index: Int,
@@ -94,12 +96,11 @@ class ConsulAPI(host: String, port: Int = 8500)(implicit as: ActorSystem, mat: M
     .flatMap { case resp => Unmarshal(resp).to[JsValue] }
   }
 
-
-  private def toMap(name: String, value: Option[String]) = value.map(x => Map(name -> x)).getOrElse(Map.empty)
-  def service(service: String, index: Option[Int] = None, wait: Option[FiniteDuration] = None): Future[ConsulResponse[Seq[ServiceInfo]]] = {
+  def service(service: String, options: Option[PollOptions] = None): Future[ConsulResponse[Seq[ServiceInfo]]] = {
     val uri: Uri = s"http://$host:$port/v1/catalog/service/$service"
-    val query = toMap("index", index.map(_.toString)) ++
-      toMap("wait", wait.map(_.toSeconds.toString + "s"))
+    val query = options.map { opt =>
+      Map("index" -> opt.index.toString, "wait" -> (opt.finiteDuration.toSeconds.toString + "s"))
+    }.getOrElse(Map.empty)
 
     Http().singleRequest(Get(uri.withQuery(query)))
       .flatMap(checkJsonContentType)
@@ -127,39 +128,32 @@ object Implicits {
 }
 
 object Streaming {
-
-  private case class ConsulSource(api: ConsulAPI, name: String) extends ActorPublisher[Seq[ServiceInfo]] {
-    import scala.concurrent.duration._
+  private case class ConsulSlowPoller[T](f: Option[PollOptions] => Future[ConsulResponse[T]], pollInterval: FiniteDuration) extends ActorPublisher[T] {
     import akka.pattern.pipe
-    import context.dispatcher
     import akka.stream.actor.{ActorPublisherMessage => M}
+    import context.dispatcher
 
     var currentIndex: Option[Int] = None
 
     override def receive: Receive = waitingForDownstream
 
     def waitingForDownstream: Receive = {
-      case M.Request(n) =>
-        performRequestIfNeeded()
+      case M.Request(n) => performRequestIfNeeded()
     }
 
     def requestInProgress: Receive = {
-      case si: ConsulResponse[Seq[ServiceInfo]] =>
-        println("Got response from consul")
-        println(si)
+      case si: ConsulResponse[T] =>
         if(!currentIndex.contains(si.index)) {
           onNext(si.value)
         }
         currentIndex = Some(si.index)
         performRequestIfNeeded()
-      case Status.Failure(ex) =>
-        ex.printStackTrace()
-        onError(ex)
+      case Status.Failure(ex) => onError(ex)
     }
 
     def performRequestIfNeeded() = {
       if(isActive && totalDemand > 0) {
-        api.service(name, currentIndex, Some(10 seconds)) pipeTo self
+        f(currentIndex.map(PollOptions(_, pollInterval))) pipeTo self
         context.become(requestInProgress)
       } else {
         context.become(waitingForDownstream)
@@ -168,6 +162,6 @@ object Streaming {
   }
 
   def service(api: ConsulAPI, name: String) = {
-    Source.actorPublisher[Seq[ServiceInfo]](Props.apply(ConsulSource(api, name)))
+    Source.actorPublisher[Seq[ServiceInfo]](Props(ConsulSlowPoller(api.service(name, _), 1 second)))
   }
 }
