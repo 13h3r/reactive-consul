@@ -12,6 +12,7 @@ import spray.json._
 
 import scala.concurrent.Future
 import scala.concurrent.duration._
+import scala.language.postfixOps
 
 case class Datacenter(name: String) extends AnyVal
 case class Service(
@@ -48,7 +49,11 @@ trait JsonProtocol extends DefaultJsonProtocol {
           JsNumber(sPort) <- fields.get("ServicePort")
         } yield {
           val sTags = fields.get("ServiceTags").collect {
-            case JsArray(tags) => tags.map { case JsString(value) => value }.toSet
+            case JsArray(tags) => tags.map {
+              case JsString(value) => value
+              case x => deserializationError(s"Service tag has wrong type - ${x.getClass}")
+            }.toSet
+            case x => deserializationError(s"Service tags has wrong type - ${x.getClass}")
           }
           ServiceInfo(
             node,
@@ -57,6 +62,7 @@ trait JsonProtocol extends DefaultJsonProtocol {
           )
         }
         result.getOrElse(deserializationError("Unable to deserialize response"))
+      case x => deserializationError(s"Response has wrong type - ${x.getClass}")
     },
     JsonWriter.func2Writer[ServiceInfo](_ => ???)
   )
