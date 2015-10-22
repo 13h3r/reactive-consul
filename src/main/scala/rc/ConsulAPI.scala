@@ -173,9 +173,8 @@ object Consul {
         }
         currentIndex = Some(si.index)
         performRequestIfNeeded()
-      case Status.Failure(ex) => onError(ex)
-      case Stop =>
-        onCompleteThenStop()
+      case Status.Failure(ex) => if(isActive) onError(ex)
+      case Stop => if(isActive) onCompleteThenStop()
     }
 
     def performRequestIfNeeded() = {
@@ -194,7 +193,7 @@ object Consul {
       .actorPublisher[Seq[ServiceInfo]](props)
       .named(s"consul-$name")
       .mapMaterializedValue[ConsulControl](ref => new ConsulControl {
-      override def stop(): Unit = ref ! Consul.Stop
-    })
+        override def stop(): Unit = ref ! Consul.Stop
+      })
   }
 }
