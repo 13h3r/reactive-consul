@@ -26,7 +26,7 @@ Here we create `consulApi` that represents a consul connection and next obtain `
 Next, having the `Source` of service state you can react on changes in the service configuration in a very reactive way.
 
 ## Under the hood
-Consul API is HTTP based and does not provide direct reactive communication. But, it possible to simulate reactive interaction with long polling. More details about how it implemented in consul (here)[https://www.consul.io/docs/agent/http.html]. 
+Consul API is HTTP based and does not provide direct reactive communication. But, it possible to simulate reactive interaction with long polling. More details about how it implemented in consul [here](https://www.consul.io/docs/agent/http.html). 
 
 The identity of state passed to client as `X-Consul-Index` which used to determine is state changed or no. If we got same `X-Consul-Index` as before state is no changed and stream does not emit new element. If state changed new element emitted, but there is no guarantee, that your service changed, because `X-Consul-Index` is identifies global consul state.
 
