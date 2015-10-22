@@ -1,9 +1,9 @@
 package rc
 
-import akka.actor.{Status, Props, ActorSystem}
+import akka.actor.{ActorSystem, Props, Status}
 import akka.http.scaladsl.Http
 import akka.http.scaladsl.client.RequestBuilding._
-import akka.http.scaladsl.model.{Uri, HttpResponse, HttpMessage, ContentTypes}
+import akka.http.scaladsl.model.{ContentTypes, HttpMessage, HttpResponse, Uri}
 import akka.http.scaladsl.unmarshalling.Unmarshal
 import akka.stream.actor.ActorPublisher
 import akka.stream.scaladsl.Source
@@ -70,8 +70,8 @@ trait JsonProtocol extends DefaultJsonProtocol {
 object JsonProtocol extends JsonProtocol
 
 class ConsulAPI(host: String, port: Int = 8500)(implicit as: ActorSystem, mat: Materializer) {
-  import akka.http.scaladsl.marshallers.sprayjson.SprayJsonSupport._
   import JsonProtocol._
+  import akka.http.scaladsl.marshallers.sprayjson.SprayJsonSupport._
   import as.dispatcher
 
   private def header(resp: HttpMessage, name: String): Option[String] = resp
@@ -96,10 +96,23 @@ class ConsulAPI(host: String, port: Int = 8500)(implicit as: ActorSystem, mat: M
       s"http://$host:$port/v1/catalog/register",
       registration
     ))
-    .flatMap(checkJsonContentType)
-    .flatMap(checkStatusCode)
-    .flatMap { case resp => Unmarshal(resp).to[JsValue] }
+      .flatMap(checkJsonContentType)
+      .flatMap(checkStatusCode)
+      .flatMap { case resp => Unmarshal(resp).to[JsValue] }
   }
+
+  def deregister(node: String, serviceId: Option[String] = None): Future[Unit] = {
+    val params = Map("Node" -> node) ++
+      serviceId.map(s => Map("ServiceID" -> s)).getOrElse(Map.empty)
+    Http().singleRequest(Put(
+      s"http://$host:$port/v1/catalog/deregister",
+      params
+    ))
+      .flatMap(checkJsonContentType)
+      .flatMap(checkStatusCode)
+      .map(_ => ())
+  }
+
 
   def service(service: String, options: Option[PollOptions] = None): Future[ConsulResponse[Seq[ServiceInfo]]] = {
     val uri: Uri = s"http://$host:$port/v1/catalog/service/$service"
@@ -132,8 +145,13 @@ object Implicits {
   lazy implicit val materializer = ActorMaterializer()
 }
 
-object Streaming {
-  private case class ConsulSlowPoller[T](f: Option[PollOptions] => Future[ConsulResponse[T]], pollInterval: FiniteDuration) extends ActorPublisher[T] {
+trait ConsulControl {
+  def stop(): Unit
+}
+
+object Consul {
+  private object Stop
+  private case class ConsulSlowPoller[T](action: Option[PollOptions] => Future[ConsulResponse[T]], pollInterval: FiniteDuration) extends ActorPublisher[T] {
     import akka.pattern.pipe
     import akka.stream.actor.{ActorPublisherMessage => M}
     import context.dispatcher
@@ -144,6 +162,8 @@ object Streaming {
 
     def waitingForDownstream: Receive = {
       case M.Request(n) => performRequestIfNeeded()
+      case Stop =>
+        onCompleteThenStop()
     }
 
     def requestInProgress: Receive = {
@@ -154,11 +174,13 @@ object Streaming {
         currentIndex = Some(si.index)
         performRequestIfNeeded()
       case Status.Failure(ex) => onError(ex)
+      case Stop =>
+        onCompleteThenStop()
     }
 
     def performRequestIfNeeded() = {
       if(isActive && totalDemand > 0) {
-        f(currentIndex.map(PollOptions(_, pollInterval))) pipeTo self
+        action(currentIndex.map(PollOptions(_, pollInterval))) pipeTo self
         context.become(requestInProgress)
       } else {
         context.become(waitingForDownstream)
@@ -167,6 +189,12 @@ object Streaming {
   }
 
   def service(api: ConsulAPI, name: String) = {
-    Source.actorPublisher[Seq[ServiceInfo]](Props(ConsulSlowPoller(api.service(name, _), 1 second)))
+    val props = Props(ConsulSlowPoller(api.service(name, _), 1 second))
+    Source
+      .actorPublisher[Seq[ServiceInfo]](props)
+      .named(s"consul-$name")
+      .mapMaterializedValue[ConsulControl](ref => new ConsulControl {
+      override def stop(): Unit = ref ! Consul.Stop
+    })
   }
 }
