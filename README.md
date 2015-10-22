@@ -10,7 +10,7 @@ The goal of stream based API is to provide access to state of consul as a data s
 
 The idea of data stream is to provide abstraction over data that changes of time. Like a meter, or a balance of a credit card or so. And the very natural way of presenting a data in consul is presenting it as a data stream. This allows consul clients to work with consul in a reactive way. If you are interesting in more details about reactive streams read [this](http://www.reactive-streams.org/) and [this](http://www.reactivemanifesto.org/) about the reactive methodology.
 
-Reactive Consul based on (akka streams)[http://doc.akka.io/docs/akka-stream-and-http-experimental/current/]. Here it is an example of a `Source` of service state:
+Reactive Consul based on [akka streams](http://doc.akka.io/docs/akka-stream-and-http-experimental/current). Here it is an example of a `Source` of service state:
 
 ```scala
 import akka.stream.scaladsl.{Sink, Source}
