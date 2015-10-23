@@ -1,5 +1,5 @@
 # Reactive Consul
-The goal of project is to provide asynchronous reactive scala API for [consul](http://consul.io)
+The goal of this project is to provide asynchronous reactive scala API for [consul](http://consul.io)
 
 Reactive Consul contains two API levels:
 * high-level stream based API
